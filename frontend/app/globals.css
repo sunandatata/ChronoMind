@@ -1,0 +1,29 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --foreground-rgb: 15, 15, 35;
+  --background-start-rgb: 10, 10, 20;
+  --background-end-rgb: 15, 15, 35;
+}
+
+body {
+  color: rgb(var(--foreground-rgb));
+  background: linear-gradient(
+    to bottom,
+    rgb(var(--background-start-rgb)),
+    rgb(var(--background-end-rgb))
+  );
+  min-height: 100vh;
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+}
+
+.timeline-connector {
+  position: absolute;
+  left: 1.25rem;
+  top: 2.5rem;
+  bottom: -1rem;
+  width: 2px;
+  background: linear-gradient(to bottom, #6366f1, transparent);
+}
