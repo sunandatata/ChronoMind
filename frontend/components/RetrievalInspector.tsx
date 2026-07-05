@@ -49,6 +49,10 @@ export default function RetrievalInspector({ debugTrace }: InspectorProps) {
   const afterFusion = debugTrace?.top_10_after_fusion || []
   const reranked = debugTrace?.reranked_top_10 || []
   const finalEvents = debugTrace?.final_context_events || []
+  const explanations = debugTrace?.ranking_explanations || []
+  const failureAnalysis = debugTrace?.failure_analysis || []
+  const consolidationSummary = debugTrace?.consolidation_summary || []
+  const telemetry = debugTrace?.telemetry || {}
 
   const traceSections = useMemo(() => [
     { key: 'vector', label: 'Vector', icon: <Search size={14} />, items: beforeFusion.vector || [] },
@@ -83,6 +87,12 @@ export default function RetrievalInspector({ debugTrace }: InspectorProps) {
           <div className="rounded-lg border border-slate-800 bg-slate-900/50 p-2">BM25: {candidateCounts.bm25 ?? 0}</div>
           <div className="rounded-lg border border-slate-800 bg-slate-900/50 p-2">Belief: {expandedCounts.belief ?? 0}</div>
         </div>
+        <div className="mt-3 grid grid-cols-2 md:grid-cols-4 gap-2 text-xs text-slate-400">
+          <div className="rounded-lg border border-slate-800 bg-slate-900/50 p-2">Retrieval: {Number(telemetry.retrieval_latency_ms ?? 0).toFixed(1)} ms</div>
+          <div className="rounded-lg border border-slate-800 bg-slate-900/50 p-2">Rerank: {Number(telemetry.reranking_latency_ms ?? 0).toFixed(1)} ms</div>
+          <div className="rounded-lg border border-slate-800 bg-slate-900/50 p-2">Context: {Number(telemetry.context_latency_ms ?? 0).toFixed(1)} ms</div>
+          <div className="rounded-lg border border-slate-800 bg-slate-900/50 p-2">LLM: {Number(telemetry.llm_latency_ms ?? 0).toFixed(1)} ms</div>
+        </div>
       </Section>
 
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
@@ -106,6 +116,35 @@ export default function RetrievalInspector({ debugTrace }: InspectorProps) {
         </div>
       </Section>
 
+      <Section title="Retrieval Explanations" icon={<Sparkles size={14} className="text-indigo-300" />}>
+        <div className="space-y-3">
+          {explanations.slice(0, 10).map((item: any) => (
+            <div key={item.id} className="rounded-xl border border-slate-800 bg-slate-900/50 p-4">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="text-sm font-medium text-white">#{item.rank} {item.event_type}</div>
+                <div className="text-xs text-indigo-300">Final Rank Score: {Number(item.final_score ?? 0).toFixed(4)}</div>
+              </div>
+              <p className="mt-2 text-sm text-slate-200">{item.text}</p>
+              <div className="mt-3 grid grid-cols-2 gap-2 text-[11px] text-slate-400 md:grid-cols-3 xl:grid-cols-4">
+                <Metric label="Vector Similarity" value={item.vector_similarity_score} />
+                <Metric label="BM25" value={item.bm25_score} />
+                <Metric label="Graph Score" value={item.graph_distance_score} />
+                <Metric label="Temporal" value={item.temporal_distance_score} />
+                <Metric label="Importance" value={item.importance_score} />
+                <Metric label="Strength" value={item.memory_strength} />
+                <Metric label="Centrality" value={item.graph_centrality_score} />
+                <Metric label="Causal" value={item.causal_edge_strength} />
+              </div>
+            </div>
+          ))}
+          {explanations.length === 0 && (
+            <div className="rounded-xl border border-slate-800 bg-slate-900/50 p-4 text-sm text-slate-500">
+              No ranking explanations available for this query.
+            </div>
+          )}
+        </div>
+      </Section>
+
       <Section title="Final Timeline" icon={<ChevronDown size={14} className="text-indigo-300" />}>
         <div className="space-y-2">
           {finalEvents.map((event: any, index: number) => (
@@ -120,6 +159,28 @@ export default function RetrievalInspector({ debugTrace }: InspectorProps) {
         </div>
       </Section>
 
+      <Section title="Failure Analysis" icon={<Gauge size={14} className="text-indigo-300" />}>
+        <div className="space-y-2">
+          {failureAnalysis.map((item: any, idx: number) => (
+            <div key={`${item.reason}-${idx}`} className="rounded-lg border border-slate-800 bg-slate-900/50 p-3 text-sm text-slate-200">
+              <div className="text-xs uppercase tracking-wider text-slate-500">{item.reason}</div>
+              <div className="mt-1">{item.detail}</div>
+            </div>
+          ))}
+        </div>
+      </Section>
+
+      <Section title="Consolidation" icon={<GitBranch size={14} className="text-indigo-300" />}>
+        <div className="space-y-2">
+          {consolidationSummary.map((item: any, idx: number) => (
+            <div key={`${item.month}-${idx}`} className="rounded-lg border border-slate-800 bg-slate-900/50 p-3 text-sm text-slate-200">
+              <div className="text-xs uppercase tracking-wider text-slate-500">{item.month}</div>
+              <div className="mt-1">{item.summary}</div>
+            </div>
+          ))}
+        </div>
+      </Section>
+
       {debugTrace?.context_text && (
         <Section title="LLM Input Context" icon={<Gauge size={14} className="text-indigo-300" />}>
           <pre className="max-h-96 overflow-auto whitespace-pre-wrap rounded-lg border border-slate-800 bg-slate-950/60 p-3 text-xs text-slate-300">
@@ -127,6 +188,16 @@ export default function RetrievalInspector({ debugTrace }: InspectorProps) {
           </pre>
         </Section>
       )}
+    </div>
+  )
+}
+
+function Metric({ label, value }: { label: string; value: any }) {
+  const numeric = typeof value === 'number' ? value : Number(value ?? 0)
+  return (
+    <div className="rounded-lg border border-slate-800 bg-slate-950/50 p-2">
+      <div className="text-slate-500">{label}</div>
+      <div className="mt-1 text-slate-200">{numeric.toFixed(3)}</div>
     </div>
   )
 }

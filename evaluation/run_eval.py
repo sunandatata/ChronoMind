@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import math
 import os
+import json
+from datetime import datetime
+from pathlib import Path
 from dataclasses import dataclass
 from typing import Callable
 
@@ -10,6 +13,8 @@ import httpx
 
 API_URL = os.environ.get("CHRONOMIND_API_URL", "http://localhost:8000")
 QUERY_ENDPOINT = f"{API_URL}/api/query"
+STATS_ENDPOINT = f"{API_URL}/api/stats"
+HISTORY_PATH = Path(__file__).resolve().parents[1] / "backend" / "data" / "evaluation_history.json"
 
 
 @dataclass
@@ -125,6 +130,16 @@ def recall_at_k(retrieved: list[str], gold_hits: list[int], k: int) -> float:
     return found / relevant_total
 
 
+def precision_at_k(gold_hits: list[int], k: int) -> float:
+    if not gold_hits:
+        return 0.0
+    limit = min(k, len(gold_hits))
+    if limit == 0:
+        return 0.0
+    found = sum(1 for idx in range(limit) if gold_hits[idx] > 0)
+    return found / limit
+
+
 def mrr(gold_hits: list[int], k: int) -> float:
     for idx, score in enumerate(gold_hits[:k], start=1):
         if score > 0:
@@ -198,6 +213,7 @@ def evaluate_query(session: httpx.Client, item: EvalQuery, k: int = 10) -> dict:
         "name": item.name,
         "query": item.query,
         "recall@k": recall_at_k([event.get("text", "") for event in source_events], gold_hits, k),
+        "precision@k": precision_at_k(gold_hits, k),
         "mrr": mrr(gold_hits, k),
         "ndcg@10": ndcg(gold_hits, 10),
         "temporal_ordering_accuracy": temporal_ordering_accuracy(source_events[:k], item.gold_order),
@@ -210,23 +226,48 @@ def evaluate_query(session: httpx.Client, item: EvalQuery, k: int = 10) -> dict:
 def main() -> None:
     results = []
     with httpx.Client() as session:
+        stats = session.get(STATS_ENDPOINT, timeout=30).json()
         for item in QUERIES:
             results.append(evaluate_query(session, item))
 
     aggregate = {
         "recall@k": sum(item["recall@k"] for item in results) / len(results),
+        "precision@k": sum(item["precision@k"] for item in results) / len(results),
         "mrr": sum(item["mrr"] for item in results) / len(results),
         "ndcg@10": sum(item["ndcg@10"] for item in results) / len(results),
         "temporal_ordering_accuracy": sum(item["temporal_ordering_accuracy"] for item in results) / len(results),
         "redundancy_score": sum(item["redundancy_score"] for item in results) / len(results),
     }
 
+    HISTORY_PATH.parent.mkdir(parents=True, exist_ok=True)
+    history = []
+    if HISTORY_PATH.exists():
+        try:
+            history = json.loads(HISTORY_PATH.read_text(encoding="utf-8"))
+        except Exception:
+            history = []
+    history.append(
+        {
+            "run_id": datetime.utcnow().strftime("%Y%m%dT%H%M%SZ"),
+            "created_at": datetime.utcnow().isoformat(),
+            "dataset_size": int(stats.get("vector_memories") or stats.get("total_memories") or 0),
+            "metrics": aggregate,
+            "queries": results,
+        }
+    )
+    HISTORY_PATH.write_text(json.dumps(history, indent=2), encoding="utf-8")
+
     print("ChronoMind retrieval evaluation")
     for item in results:
-        print(f"- {item['name']}: recall@k={item['recall@k']:.3f}, mrr={item['mrr']:.3f}, ndcg@10={item['ndcg@10']:.3f}, toa={item['temporal_ordering_accuracy']:.3f}, redundancy={item['redundancy_score']:.3f}")
+        print(
+            f"- {item['name']}: recall@k={item['recall@k']:.3f}, precision@k={item['precision@k']:.3f}, "
+            f"mrr={item['mrr']:.3f}, ndcg@10={item['ndcg@10']:.3f}, toa={item['temporal_ordering_accuracy']:.3f}, "
+            f"redundancy={item['redundancy_score']:.3f}"
+        )
     print("Aggregate")
     print(
-        f"- recall@k={aggregate['recall@k']:.3f}, mrr={aggregate['mrr']:.3f}, ndcg@10={aggregate['ndcg@10']:.3f}, "
+        f"- recall@k={aggregate['recall@k']:.3f}, precision@k={aggregate['precision@k']:.3f}, "
+        f"mrr={aggregate['mrr']:.3f}, ndcg@10={aggregate['ndcg@10']:.3f}, "
         f"toa={aggregate['temporal_ordering_accuracy']:.3f}, redundancy={aggregate['redundancy_score']:.3f}"
     )
 

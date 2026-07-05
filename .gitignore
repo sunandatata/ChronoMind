@@ -13,6 +13,10 @@ out/
 .env
 .env.local
 
+# Generated memory/evaluation artifacts
+backend/data/*.json
+backend/data/*.jsonl
+
 # OS / editor
 .DS_Store
 Thumbs.db

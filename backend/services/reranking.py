@@ -10,6 +10,7 @@ import numpy as np
 from models.event import EventType, MemoryEvent, SourceType
 from services.embedding import cosine_similarity
 from services.graph import get_graph_service
+from services.ranker import load_model, predict_score
 from services.query_understanding import QueryProfile, QueryType, TemporalIntent
 
 
@@ -232,6 +233,13 @@ def _centrality_score(candidate: dict, graph_signals: dict[str, dict[str, float]
     return float(signal.get("page_rankish", 0.2))
 
 
+def _graph_depth_score(candidate: dict) -> float:
+    hop = candidate.get("_hop")
+    if hop is None:
+        return 0.35
+    return max(0.1, 1.0 - min(float(hop), 5.0) / 5.0)
+
+
 def _vector_similarity(candidate: dict, query_embedding: list[float]) -> float:
     embedding = candidate.get("embedding") or []
     if not embedding:
@@ -267,6 +275,18 @@ def _source_support_score(candidate: dict) -> float:
     return min(support, 1.0)
 
 
+def _retrieval_source_score(candidate: dict) -> float:
+    channels = candidate.get("channels") or {}
+    score = 0.0
+    if "vector" in channels:
+        score += 0.35
+    if "graph" in channels:
+        score += 0.45
+    if "bm25" in channels:
+        score += 0.20
+    return min(score, 1.0)
+
+
 def _importance_score(candidate: dict) -> float:
     payload = candidate.get("payload", candidate)
     return float(payload.get("importance_score") or candidate.get("importance_score") or 0.5)
@@ -283,6 +303,9 @@ def _memory_strength(candidate: dict) -> float:
         strength += 0.04
     if "bm25" in channels:
         strength += 0.03
+    payload = candidate.get("payload", candidate)
+    retrieval_count = float(payload.get("retrieval_count") or 0.0)
+    strength += min(retrieval_count, 10.0) * 0.01
     return min(strength, 1.0)
 
 
@@ -382,26 +405,9 @@ def _score_candidate(
     contra_score = _contra_bonus(candidate)
     importance_score = _importance_score(candidate)
     memory_strength = _memory_strength(candidate)
-
-    weights = _feature_weights(profile)
-    raw_score = (
-        weights["vector"] * vector_score
-        + weights["lexical"] * lexical_score
-        + weights["graph"] * graph_score
-        + weights["centrality"] * centrality_score
-        + weights["temporal"] * temporal_score
-        + weights["recency"] * recency_score
-        + weights["event_type"] * event_type_score
-        + weights["causal"] * causal_score
-        + weights["entity"] * entity_score
-        + weights["support"] * support_score
-        + weights["contra"] * contra_score
-        + 0.10 * importance_score
-        + 0.08 * memory_strength
-    )
-
-    query_bias = 0.05 if profile.query_type == QueryType.FACTUAL_RECALL else 0.0
-    calibrated = 1.0 / (1.0 + math.exp(-7.5 * (raw_score + query_bias - 0.5)))
+    confidence_score = float(candidate.get("payload", candidate).get("confidence") or candidate.get("confidence") or 1.0)
+    retrieval_source_score = _retrieval_source_score(candidate)
+    graph_depth_score = _graph_depth_score(candidate)
 
     features = {
         "vector_similarity_score": vector_score,
@@ -417,8 +423,36 @@ def _score_candidate(
         "contradiction_score": contra_score,
         "importance_score": importance_score,
         "memory_strength": memory_strength,
-        "calibrated_score": calibrated,
+        "confidence_score": confidence_score,
+        "retrieval_source_score": retrieval_source_score,
+        "graph_depth_score": graph_depth_score,
     }
+    model = load_model()
+    if model:
+        calibrated = predict_score(features, model)
+    else:
+        weights = _feature_weights(profile)
+        raw_score = (
+            weights["vector"] * vector_score
+            + weights["lexical"] * lexical_score
+            + weights["graph"] * graph_score
+            + weights["centrality"] * centrality_score
+            + weights["temporal"] * temporal_score
+            + weights["recency"] * recency_score
+            + weights["event_type"] * event_type_score
+            + weights["causal"] * causal_score
+            + weights["entity"] * entity_score
+            + weights["support"] * support_score
+            + weights["contra"] * contra_score
+            + 0.10 * importance_score
+            + 0.08 * memory_strength
+            + 0.10 * confidence_score
+            + 0.05 * retrieval_source_score
+            + 0.05 * graph_depth_score
+        )
+        query_bias = 0.05 if profile.query_type == QueryType.FACTUAL_RECALL else 0.0
+        calibrated = 1.0 / (1.0 + math.exp(-7.5 * (raw_score + query_bias - 0.5)))
+    features["calibrated_score"] = calibrated
     return calibrated, features
 
 

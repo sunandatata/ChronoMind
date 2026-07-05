@@ -4,6 +4,7 @@ import { useState } from 'react'
 import { Search, Loader2, Brain, Sparkles } from 'lucide-react'
 import EventCard from './EventCard'
 import RetrievalInspector from './RetrievalInspector'
+import PipelinePlayback from './PipelinePlayback'
 
 interface MemoryEvent {
   id: string
@@ -23,6 +24,7 @@ interface QueryResponse {
   query_type: string
   events_searched: number
   confidence?: number
+  session_id?: string
   debug_trace?: Record<string, any>
 }
 
@@ -38,6 +40,7 @@ export default function QueryInterface() {
   const [loading, setLoading] = useState(false)
   const [response, setResponse] = useState<QueryResponse | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [sessionId, setSessionId] = useState('')
 
   const handleQuery = async (q?: string) => {
     const queryText = q || query
@@ -52,7 +55,7 @@ export default function QueryInterface() {
       const res = await fetch('/api/query', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ query: queryText, top_k: 8 }),
+        body: JSON.stringify({ query: queryText, top_k: 8, session_id: sessionId || undefined }),
       })
       if (!res.ok) throw new Error(`API error: ${res.status}`)
       const data = await res.json()
@@ -86,6 +89,35 @@ export default function QueryInterface() {
           {loading ? <Loader2 size={14} className="animate-spin" /> : <Brain size={14} />}
           {loading ? 'Thinking...' : 'Query'}
         </button>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+        <input
+          type="text"
+          value={sessionId}
+          onChange={(e) => setSessionId(e.target.value)}
+          placeholder="Session ID for follow-up exploration"
+          className="w-full px-4 py-3 bg-slate-900/80 border border-slate-700 rounded-xl text-slate-100 placeholder-slate-500 focus:outline-none focus:border-indigo-500 text-xs"
+        />
+        <button
+          onClick={async () => {
+            if (sessionId.trim()) {
+              try {
+                await fetch(`/api/sessions/${sessionId}`, { method: 'DELETE' })
+              } catch {
+                // best effort
+              }
+            }
+            setSessionId('')
+            setResponse(null)
+          }}
+          className="px-4 py-3 rounded-xl border border-slate-700 text-slate-300 hover:text-white hover:bg-slate-800 text-xs"
+        >
+          Reset Session
+        </button>
+        <div className="px-4 py-3 rounded-xl border border-slate-800 bg-slate-950/40 text-xs text-slate-400">
+          {response?.session_id ? `Active session: ${response.session_id}` : 'No active retrieval session'}
+        </div>
       </div>
 
       {!response && !loading && (
@@ -157,6 +189,9 @@ export default function QueryInterface() {
 
           {response.debug_trace && Object.keys(response.debug_trace).length > 0 && (
             <div className="space-y-3">
+              {Array.isArray(response.debug_trace.playback_steps) && response.debug_trace.playback_steps.length > 0 && (
+                <PipelinePlayback steps={response.debug_trace.playback_steps} />
+              )}
               <div className="flex items-center gap-2 text-xs font-medium text-slate-400 uppercase tracking-wider">
                 <Sparkles size={14} />
                 Retrieval Inspector

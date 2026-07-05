@@ -6,13 +6,19 @@ import IngestPanel from '@/components/IngestPanel'
 import TimelineView from '@/components/TimelineView'
 import GraphView from '@/components/GraphView'
 import SystemStats from '@/components/SystemStats'
+import BeliefEvolutionView from '@/components/BeliefEvolutionView'
+import EvaluationDashboard from '@/components/EvaluationDashboard'
+import ArchitectureView from '@/components/ArchitectureView'
 import { Brain, Search, Upload, GitBranch, Network } from 'lucide-react'
 import clsx from 'clsx'
 
-type Tab = 'query' | 'ingest' | 'timeline' | 'graph'
+type Tab = 'query' | 'belief' | 'evaluation' | 'architecture' | 'ingest' | 'timeline' | 'graph'
 
 const tabs: { id: Tab; label: string; icon: React.ReactNode }[] = [
   { id: 'query', label: 'Query Memory', icon: <Search size={16} /> },
+  { id: 'belief', label: 'Belief Evolution', icon: <GitBranch size={16} /> },
+  { id: 'evaluation', label: 'Evaluation', icon: <Network size={16} /> },
+  { id: 'architecture', label: 'Architecture', icon: <Brain size={16} /> },
   { id: 'ingest', label: 'Ingest', icon: <Upload size={16} /> },
   { id: 'timeline', label: 'Timeline', icon: <GitBranch size={16} /> },
   { id: 'graph', label: 'Graph', icon: <Network size={16} /> },
@@ -62,6 +68,9 @@ export default function HomePage() {
 
       <main className="max-w-6xl mx-auto px-6 py-8">
         {activeTab === 'query' && <QueryInterface />}
+        {activeTab === 'belief' && <BeliefEvolutionView />}
+        {activeTab === 'evaluation' && <EvaluationDashboard />}
+        {activeTab === 'architecture' && <ArchitectureView />}
         {activeTab === 'ingest' && <IngestPanel />}
         {activeTab === 'timeline' && <TimelineView />}
         {activeTab === 'graph' && <GraphView />}

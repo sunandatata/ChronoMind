@@ -10,8 +10,15 @@ class QueryType(str, Enum):
     FACTUAL_RECALL = "FACTUAL_RECALL"
     DECISION_TRACE = "DECISION_TRACE"
     TEMPORAL_EVOLUTION = "TEMPORAL_EVOLUTION"
+    BELIEF_EVOLUTION = "BELIEF_EVOLUTION"
+    COMPARISON = "COMPARISON"
+    FACT_LOOKUP = "FACT_LOOKUP"
+    LEARNING_HISTORY = "LEARNING_HISTORY"
+    PROJECT_HISTORY = "PROJECT_HISTORY"
+    RELATIONSHIP_EXPLORATION = "RELATIONSHIP_EXPLORATION"
     CAUSAL_INFERENCE = "CAUSAL_INFERENCE"
     COMPARISON_QUERY = "COMPARISON_QUERY"
+    CAUSAL_ANALYSIS = "CAUSAL_ANALYSIS"
 
 
 class TemporalIntent(str, Enum):
@@ -31,6 +38,7 @@ class QueryProfile:
     time_window: tuple[datetime, datetime] | None
     graph_hops: int
     candidate_limits: dict[str, int]
+    retrieval_plan: list[str]
 
     def to_trace(self) -> dict:
         return {
@@ -44,12 +52,18 @@ class QueryProfile:
             if self.time_window else None,
             "graph_hops": self.graph_hops,
             "candidate_limits": self.candidate_limits,
+            "retrieval_plan": self.retrieval_plan,
         }
 
 
 _DECISION_SIGNALS = {"led", "cause", "why did", "what made", "reason", "decide", "chose", "switch"}
 _EVOLUTION_SIGNALS = {"changed", "evolved", "different", "shift", "over time", "anymore", "used to", "evolve"}
+_BELIEF_SIGNALS = {"believe", "opinion", "think", "thought", "mind", "view"}
+_LEARNING_SIGNALS = {"learn", "learning", "study", "course", "understand", "understanding"}
+_PROJECT_SIGNALS = {"project", "work", "build", "ship", "migration", "launch"}
+_RELATIONSHIP_SIGNALS = {"related", "connected", "relationship", "between", "influenced", "caused by"}
 _COMPARE_SIGNALS = {"compare", "versus", "vs", "better than", "worse than", "difference between", "difference"}
+_FACT_LOOKUP_SIGNALS = {"what is", "who is", "when is", "where is", "which", "define", "lookup"}
 _FACTUAL_SIGNALS = {"when", "what", "who", "where", "which", "did i", "have i", "was i"}
 _CURRENT_SIGNALS = {"current", "now", "today", "these days", "right now", "currently", "present"}
 
@@ -137,6 +151,10 @@ def understand_query(query: str, time_start: str | None = None, time_end: str | 
         query_type = QueryType.COMPARISON_QUERY
         temporal_intent = TemporalIntent.EVOLUTION_OVER_TIME
         graph_hops = 2
+    elif any(signal in q for signal in _BELIEF_SIGNALS) and any(signal in q for signal in _EVOLUTION_SIGNALS):
+        query_type = QueryType.BELIEF_EVOLUTION
+        temporal_intent = TemporalIntent.EVOLUTION_OVER_TIME
+        graph_hops = 3
     elif any(signal in q for signal in _DECISION_SIGNALS):
         query_type = QueryType.DECISION_TRACE
         temporal_intent = TemporalIntent.EVOLUTION_OVER_TIME
@@ -145,6 +163,22 @@ def understand_query(query: str, time_start: str | None = None, time_end: str | 
         query_type = QueryType.TEMPORAL_EVOLUTION
         temporal_intent = TemporalIntent.EVOLUTION_OVER_TIME
         graph_hops = 3
+    elif any(signal in q for signal in _LEARNING_SIGNALS):
+        query_type = QueryType.LEARNING_HISTORY
+        temporal_intent = TemporalIntent.EVOLUTION_OVER_TIME
+        graph_hops = 2
+    elif any(signal in q for signal in _PROJECT_SIGNALS):
+        query_type = QueryType.PROJECT_HISTORY
+        temporal_intent = TemporalIntent.EVOLUTION_OVER_TIME
+        graph_hops = 3
+    elif any(signal in q for signal in _RELATIONSHIP_SIGNALS):
+        query_type = QueryType.RELATIONSHIP_EXPLORATION
+        temporal_intent = TemporalIntent.PAST_STATE
+        graph_hops = 3
+    elif any(signal in q for signal in _FACT_LOOKUP_SIGNALS):
+        query_type = QueryType.FACT_LOOKUP
+        temporal_intent = TemporalIntent.CURRENT_STATE
+        graph_hops = 1
     elif any(signal in q for signal in ("cause", "caused", "influence", "influenced", "why")):
         query_type = QueryType.CAUSAL_INFERENCE
         temporal_intent = TemporalIntent.PAST_STATE
@@ -154,7 +188,21 @@ def understand_query(query: str, time_start: str | None = None, time_end: str | 
         temporal_intent = TemporalIntent.CURRENT_STATE if any(signal in q for signal in _CURRENT_SIGNALS) else TemporalIntent.PAST_STATE
         graph_hops = 2
 
-    causal_intent = query_type in {QueryType.DECISION_TRACE, QueryType.CAUSAL_INFERENCE}
+    causal_intent = query_type in {QueryType.DECISION_TRACE, QueryType.CAUSAL_INFERENCE, QueryType.CAUSAL_ANALYSIS}
+
+    retrieval_plan = {
+        QueryType.DECISION_TRACE: ["vector", "graph", "temporal", "bm25", "ltr", "timeline"],
+        QueryType.TEMPORAL_EVOLUTION: ["graph", "belief", "vector", "bm25", "ltr", "timeline"],
+        QueryType.BELIEF_EVOLUTION: ["graph", "contradicts", "refines", "reinforces", "timeline"],
+        QueryType.COMPARISON_QUERY: ["vector_a", "vector_b", "graph", "bm25", "comparative_context"],
+        QueryType.FACT_LOOKUP: ["bm25", "vector", "timeline"],
+        QueryType.LEARNING_HISTORY: ["vector", "graph", "timeline"],
+        QueryType.PROJECT_HISTORY: ["graph", "vector", "timeline"],
+        QueryType.RELATIONSHIP_EXPLORATION: ["graph", "community", "shortest_path"],
+        QueryType.CAUSAL_INFERENCE: ["vector", "graph", "causal_chain", "timeline"],
+        QueryType.CAUSAL_ANALYSIS: ["vector", "graph", "causal_chain", "timeline"],
+        QueryType.FACTUAL_RECALL: ["bm25", "vector", "timeline"],
+    }.get(query_type, ["vector", "graph", "bm25"])
 
     candidate_limits = {
         "vector": 30 if query_type != QueryType.FACTUAL_RECALL else 20,
@@ -173,4 +221,5 @@ def understand_query(query: str, time_start: str | None = None, time_end: str | 
         time_window=temporal_window,
         graph_hops=graph_hops,
         candidate_limits=candidate_limits,
+        retrieval_plan=retrieval_plan,
     )

@@ -35,7 +35,13 @@ class MemoryEvent(BaseModel):
     confidence: float = 1.0
     importance_score: float = 0.5
     memory_strength: float = 0.5
+    retrieval_count: int = 0
+    last_accessed_at: Optional[datetime] = None
+    decay_coefficient: float = 0.12
     embedding_id: Optional[str] = None
+    version: int = 1
+    original_event_id: Optional[str] = None
+    source_id: Optional[str] = None
 
 
 class IngestRequest(BaseModel):

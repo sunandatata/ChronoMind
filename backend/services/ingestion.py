@@ -72,6 +72,17 @@ DECISION_WORDS = {"decided", "decision", "chose", "switched", "moved", "pivot", 
 REFINEMENT_WORDS = {"refined", "better", "improved", "adjusted", "optimized", "clarified", "deeper", "deepen"}
 REINFORCEMENT_WORDS = {"confident", "confirmed", "reinforced", "strengthened", "solidified", "validated"}
 CONTRADICTION_WORDS = {"however", "but", "instead", "though", "contrary", "yet", "frustrated", "uncertain"}
+SOURCE_CONFIDENCE = {
+    "calendar": 0.99,
+    "email": 0.95,
+    "document": 0.9,
+    "note": 0.88,
+    "manual": 0.85,
+    "chat": 0.75,
+    "voice": 0.75,
+    "transcript": 0.75,
+    "ocr": 0.55,
+}
 
 
 async def _extract_with_llm(text: str, timestamp: datetime, source) -> list[MemoryEvent]:
@@ -301,6 +312,12 @@ def _payload(event: MemoryEvent) -> dict:
         "confidence": event.confidence,
         "importance_score": event.importance_score,
         "memory_strength": event.memory_strength,
+        "retrieval_count": event.retrieval_count,
+        "last_accessed_at": event.last_accessed_at.isoformat() if event.last_accessed_at else None,
+        "decay_coefficient": event.decay_coefficient,
+        "version": event.version,
+        "original_event_id": event.original_event_id,
+        "source_id": event.source_id,
         "is_demo": False,
     }
 
@@ -367,10 +384,16 @@ async def ingest(request: IngestRequest) -> IngestResponse:
     event_ids: list[str] = []
     all_events_with_embeddings: list[tuple[MemoryEvent, list[float]]] = []
 
+    source_confidence = SOURCE_CONFIDENCE.get(request.source.value.lower(), 0.82)
+
     for event in events:
         if not event.text.strip():
             continue
 
+        event.source_id = request.source_id or event.source_id or f"{request.source.value}:{event.timestamp:%Y%m%d}"
+        event.version = 1
+        event.original_event_id = None
+        event.confidence = max(event.confidence, source_confidence)
         event.importance_score = _importance_score(event)
         event.memory_strength = _memory_strength(event)
         embedding = await embed_text(event.text)
@@ -382,6 +405,39 @@ async def ingest(request: IngestRequest) -> IngestResponse:
         except Exception as exc:
             logger.error("Failed to persist event %s: %s", event.id, exc)
             continue
+
+        if request.source_id:
+            try:
+                async with graph_svc.driver.session() as session:
+                    result = await session.run(
+                        """
+                        MATCH (prev:Event)
+                        WHERE prev.source_id = $source_id AND prev.id <> $event_id
+                        RETURN prev
+                        ORDER BY prev.version DESC, prev.timestamp DESC
+                        LIMIT 1
+                        """,
+                        source_id=request.source_id,
+                        event_id=event.id,
+                    )
+                    records = await result.data()
+                    if records:
+                        previous = records[0]["prev"]
+                        prev_version = int(previous.get("version") or 1)
+                        event.version = prev_version + 1
+                        event.original_event_id = previous.get("original_event_id") or previous.get("id")
+                        await graph_svc.update_event_properties(
+                            event.id,
+                            {"version": event.version, "original_event_id": event.original_event_id},
+                        )
+                        await graph_svc.create_edge(
+                            event.id,
+                            previous.get("id"),
+                            "PREVIOUS_VERSION",
+                            {"confidence": 1.0},
+                        )
+            except Exception as exc:
+                logger.error("Version link failed for %s: %s", event.id, exc)
 
         bm25.add_document(event.id, event.text, payload)
         all_events_with_embeddings.append((event, embedding))

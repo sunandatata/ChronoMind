@@ -2,7 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 import asyncio
-from api import ingest, query, timeline, graph as graph_api, stats
+from api import ingest, query, timeline, graph as graph_api, stats, belief, evaluations, graph_metrics, sessions
 from services.graph import get_graph_service
 from services.vector import get_vector_service
 
@@ -45,7 +45,11 @@ app.include_router(ingest.router, prefix="/api", tags=["ingestion"])
 app.include_router(query.router, prefix="/api", tags=["query"])
 app.include_router(timeline.router, prefix="/api", tags=["timeline"])
 app.include_router(graph_api.router, prefix="/api", tags=["graph"])
+app.include_router(graph_metrics.router, prefix="/api", tags=["graph-metrics"])
+app.include_router(sessions.router, prefix="/api", tags=["sessions"])
+app.include_router(belief.router, prefix="/api", tags=["belief"])
 app.include_router(stats.router, prefix="/api", tags=["stats"])
+app.include_router(evaluations.router, prefix="/api", tags=["evaluation"])
 
 
 @app.get("/health")

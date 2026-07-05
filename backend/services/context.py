@@ -125,6 +125,7 @@ def _quality_filter(
         score = float(detail.get("score") or features.get("calibrated_score") or 0.0)
         support = float(features.get("source_support_score") or 0.0)
         causal = float(features.get("causal_edge_strength") or 0.0)
+        confidence = float(features.get("confidence_score") or 0.0)
         cluster = detail.get("cluster") or "misc"
         month = event.timestamp.strftime("%Y-%m")
 
@@ -134,6 +135,8 @@ def _quality_filter(
         if query_profile and query_profile.query_type == QueryType.TEMPORAL_EVOLUTION:
             if score < 0.20 and support < 0.18:
                 continue
+        if confidence < 0.35 and score < 0.28:
+            continue
 
         if len(event.text.split()) < 6 and len(event.entities) >= 3:
             continue
@@ -178,6 +181,28 @@ def _group_timeline(events: list[MemoryEvent]) -> list[tuple[str, list[MemoryEve
             )
         )
     return grouped
+
+
+def build_consolidation_summary(events: list[MemoryEvent]) -> list[dict]:
+    buckets: dict[tuple[str, str], list[MemoryEvent]] = defaultdict(list)
+    for event in events:
+        label_items = list(dict.fromkeys((event.topics or []) + (event.entities or [])))
+        key = (event.timestamp.strftime("%Y-%m"), " ".join(sorted(label_items)))
+        buckets[key].append(event)
+
+    summaries: list[dict] = []
+    for (bucket, label), items in buckets.items():
+        if len(items) < 2:
+            continue
+        summaries.append(
+            {
+                "month": bucket,
+                "summary": f"This memory summarizes {len(items)} related events.",
+                "label": label or "general",
+                "event_ids": [item.id for item in items],
+            }
+        )
+    return summaries[:10]
 
 
 def _event_line(event: MemoryEvent, index: int, shift_ids: set[str]) -> str:
@@ -265,13 +290,33 @@ def assemble_context(
             "beliefs, and experiments to the later decision. Preserve dates and explain "
             "what led to what."
         ),
+        "BELIEF_EVOLUTION": (
+            "INSTRUCTION: Explain how beliefs evolved over time, calling out contradictions, "
+            "refinements, and reinforcing events in chronological order."
+        ),
         "TEMPORAL_EVOLUTION": (
             "INSTRUCTION: Explain how the position changed over the full timeline. "
             "Call out BELIEF SHIFT markers and the events that drove them."
         ),
+        "FACT_LOOKUP": (
+            "INSTRUCTION: Answer the lookup question directly, then anchor the answer with the most relevant supporting memories."
+        ),
+        "LEARNING_HISTORY": (
+            "INSTRUCTION: Reconstruct the learning path from first exposure through application and reinforcement."
+        ),
+        "PROJECT_HISTORY": (
+            "INSTRUCTION: Reconstruct the project timeline, emphasizing milestones, decisions, and causal inflection points."
+        ),
+        "RELATIONSHIP_EXPLORATION": (
+            "INSTRUCTION: Explain how the memories are connected, including shared entities, concepts, and causal links."
+        ),
         "FACTUAL_RECALL": (
             "INSTRUCTION: Identify the first encounter, later learning milestones, "
             "and how understanding deepened over time."
+        ),
+        "COMPARISON": (
+            "INSTRUCTION: Compare the relevant memories across the requested dimensions, "
+            "preserving time and difference markers."
         ),
         "CAUSAL_INFERENCE": (
             "INSTRUCTION: Explain the connected memories and influence paths between them."

@@ -9,6 +9,7 @@ from services.embedding import embed_batch, embed_text
 from services.graph import get_graph_service
 from services.query_understanding import QueryProfile, QueryType, understand_query
 from services.reranking import rrf_fusion
+from services.session import get_session_service
 from services.vector import get_vector_service
 from utils.text import get_bm25_index
 
@@ -177,6 +178,12 @@ def _query_channel_counts(channel_map: dict[str, list[dict]]) -> dict[str, int]:
 
 async def hybrid_retrieve(request: QueryRequest, include_trace: bool = False):
     profile = understand_query(request.query, request.time_start, request.time_end)
+    session_svc = get_session_service()
+    session_state = None
+    if request.reset_session and request.session_id:
+        session_svc.reset(request.session_id)
+    if request.session_id:
+        session_state = session_svc.get(request.session_id)
     vector_svc = get_vector_service()
     graph_svc = get_graph_service()
     bm25 = get_bm25_index()
@@ -204,6 +211,7 @@ async def hybrid_retrieve(request: QueryRequest, include_trace: bool = False):
         neighbor_confidence_floor=0.5 if profile.query_type == QueryType.FACTUAL_RECALL else 0.6,
         causal_only=False,
         limit=profile.candidate_limits["graph"],
+        exclude_event_ids=(session_state.explored_event_ids if session_state else []),
     )
 
     bm25_results = bm25.search(request.query, limit=profile.candidate_limits["bm25"])
@@ -216,17 +224,20 @@ async def hybrid_retrieve(request: QueryRequest, include_trace: bool = False):
     if profile.causal_intent:
         seed_ids = [item.get("id", "") for item in graph_results[:12] if item.get("id")]
         causal_results = await graph_svc.get_causal_chain(seed_ids)
-    if profile.query_type in {QueryType.TEMPORAL_EVOLUTION, QueryType.COMPARISON_QUERY}:
+    if profile.query_type in {QueryType.TEMPORAL_EVOLUTION, QueryType.COMPARISON_QUERY, QueryType.BELIEF_EVOLUTION}:
         seed_ids = [item.get("id", "") for item in graph_results[:12] if item.get("id")]
         belief_results = await graph_svc.get_belief_evolution(seed_ids)
-    if profile.query_type == QueryType.TEMPORAL_EVOLUTION:
+    if profile.query_type in {QueryType.TEMPORAL_EVOLUTION, QueryType.BELIEF_EVOLUTION}:
         seed_ids = [item.get("id", "") for item in graph_results[:12] if item.get("id")]
         contradiction_results = await graph_svc.get_contradiction_events(seed_ids)
 
     def _attach_time_filter(items: list[dict], source: str) -> list[dict]:
         filtered = []
+        excluded_ids = set(session_state.explored_event_ids if session_state else [])
         for rank, item in enumerate(items, start=1):
             normalized = _channel_item(source, item, rank)
+            if normalized["id"] in excluded_ids:
+                continue
             if _within_window(normalized, profile.time_window):
                 filtered.append(normalized)
         return filtered
@@ -263,6 +274,7 @@ async def hybrid_retrieve(request: QueryRequest, include_trace: bool = False):
 
     trace = {
         "query_profile": profile.to_trace(),
+        "session": session_state.to_dict() if session_state else None,
         "candidate_counts": _query_channel_counts(channel_map),
         "candidate_counts_with_expansion": {
             "vector": len(vector_results),

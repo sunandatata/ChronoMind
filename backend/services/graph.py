@@ -1,6 +1,7 @@
 from datetime import datetime
 from typing import Optional
 
+import networkx as nx
 from neo4j import AsyncGraphDatabase
 
 from config import get_settings
@@ -8,7 +9,17 @@ from models.event import MemoryEvent
 
 settings = get_settings()
 
-EVENT_EDGE_TYPES = {"RELATED_TO", "INFLUENCED_BY", "CAUSED_BY", "CONTRADICTS", "REFINES", "REINFORCES"}
+EVENT_EDGE_TYPES = {
+    "RELATED_TO",
+    "INFLUENCED_BY",
+    "CAUSED_BY",
+    "CONTRADICTS",
+    "REFINES",
+    "REINFORCES",
+    "PREVIOUS_VERSION",
+    "VERSION_OF",
+    "SUMMARIZES",
+}
 
 # Edges are written from the later/effect event to the earlier/influencing event.
 _EDGE_TYPE_MATRIX: dict[tuple[str, str], str] = {
@@ -108,6 +119,12 @@ class GraphService:
                     e.confidence = $confidence,
                     e.importance_score = $importance_score,
                     e.memory_strength  = $memory_strength,
+                    e.retrieval_count  = $retrieval_count,
+                    e.last_accessed_at = $last_accessed_at,
+                    e.decay_coefficient = $decay_coefficient,
+                    e.version   = $version,
+                    e.original_event_id = $original_event_id,
+                    e.source_id = $source_id,
                     e.is_demo    = $is_demo
                 """,
                 id=event.id,
@@ -121,6 +138,12 @@ class GraphService:
                 confidence=event.confidence,
                 importance_score=event.importance_score,
                 memory_strength=event.memory_strength,
+                retrieval_count=event.retrieval_count,
+                last_accessed_at=event.last_accessed_at.isoformat() if event.last_accessed_at else None,
+                decay_coefficient=event.decay_coefficient,
+                version=event.version,
+                original_event_id=event.original_event_id,
+                source_id=event.source_id,
                 is_demo=is_demo,
             )
             for topic in event.topics:
@@ -222,6 +245,21 @@ class GraphService:
                 props=properties or {},
             )
 
+    async def update_event_properties(self, event_id: str, properties: dict) -> None:
+        if not properties:
+            return
+        assignments = ", ".join([f"e.{key} = ${key}" for key in properties.keys()])
+        params = dict(properties)
+        params["event_id"] = event_id
+        async with self.driver.session() as session:
+            await session.run(
+                f"""
+                MATCH (e:Event {{id: $event_id}})
+                SET {assignments}
+                """,
+                **params,
+            )
+
     async def graph_traversal_retrieve(
         self,
         entities: list[str],
@@ -232,10 +270,12 @@ class GraphService:
         neighbor_confidence_floor: float = 0.5,
         causal_only: bool = False,
         limit: int = 30,
+        exclude_event_ids: list[str] | None = None,
     ) -> list[dict]:
         entity_terms = [entity.lower() for entity in entities]
         topic_terms = [topic.lower() for topic in topics]
         hop_pattern = f"1..{max(1, min(max_hops, 3))}"
+        excluded_ids = exclude_event_ids or []
 
         if not entity_terms and not topic_terms:
             return []
@@ -246,6 +286,7 @@ class GraphService:
                 MATCH (seed:Event)
                 WHERE coalesce(seed.is_demo, false) = false
                   AND coalesce(seed.confidence, 0.0) >= $min_seed_confidence
+                  AND NOT seed.id IN $excluded_ids
                   AND (
                     EXISTS {
                       MATCH (seed)-[:MENTIONS]->(en:Entity)
@@ -264,6 +305,7 @@ class GraphService:
                 topics=topic_terms,
                 seed_limit=max(seed_limit, 12),
                 min_seed_confidence=min_seed_confidence,
+                excluded_ids=excluded_ids,
             )
             seed_records = await seed_result.data()
             seed_ids = [
@@ -306,6 +348,7 @@ class GraphService:
                 }}
                 WITH ev, min(hop) AS hop, collect(DISTINCT match_type) AS match_types
                 WHERE $causal_only = false OR any(label IN match_types WHERE label CONTAINS 'causal')
+                  AND NOT ev.id IN $excluded_ids
                 RETURN ev, hop, match_types
                 ORDER BY hop ASC, ev.timestamp DESC
                 LIMIT $limit
@@ -314,6 +357,7 @@ class GraphService:
                 neighbor_confidence_floor=neighbor_confidence_floor,
                 causal_only=causal_only,
                 limit=limit,
+                excluded_ids=excluded_ids,
             )
             records = await traversal_result.data()
             return [
@@ -378,6 +422,21 @@ class GraphService:
         chain.sort(key=lambda item: (item.get("timestamp", ""), -item.get("_chain_depth", 0)))
         return chain[:20]
 
+    async def get_event_versions(self, event_id: str) -> list[dict]:
+        async with self.driver.session() as session:
+            result = await session.run(
+                """
+                MATCH path = (latest:Event {id: $event_id})-[:PREVIOUS_VERSION*0..5]->(previous:Event)
+                WITH nodes(path) AS nodes
+                UNWIND nodes AS node
+                RETURN DISTINCT node AS ev
+                ORDER BY ev.version ASC, ev.timestamp ASC
+                """,
+                event_id=event_id,
+            )
+            records = await result.data()
+        return [record["ev"] for record in records if record.get("ev")]
+
     async def get_belief_evolution(self, event_ids: list[str]) -> list[dict]:
         if not event_ids:
             return []
@@ -414,6 +473,64 @@ class GraphService:
                 }
             )
         return chain
+
+    async def get_belief_evolution_by_concept(self, concept: str) -> dict:
+        concept_key = concept.lower().strip()
+        if not concept_key:
+            return {"concept": concept, "events": [], "links": []}
+
+        async with self.driver.session() as session:
+            result = await session.run(
+                """
+                MATCH (seed:Event)
+                WHERE coalesce(seed.is_demo, false) = false
+                  AND (
+                    EXISTS {
+                      MATCH (seed)-[:ABOUT]->(c:Concept)
+                      WHERE toLower(c.label) CONTAINS $concept
+                    }
+                    OR toLower(seed.text) CONTAINS $concept
+                  )
+                  AND seed.event_type IN ['belief', 'opinion', 'decision', 'learning', 'action']
+                OPTIONAL MATCH path = (seed)-[:CONTRADICTS|REFINES|REINFORCES|INFLUENCED_BY|CAUSED_BY*1..3]-(related:Event)
+                WHERE coalesce(related.is_demo, false) = false
+                WITH seed, collect(DISTINCT related) AS related_events
+                RETURN seed, related_events
+                ORDER BY seed.timestamp ASC
+                LIMIT 25
+                """,
+                concept=concept_key,
+            )
+            records = await result.data()
+
+        seen: set[str] = set()
+        events: list[dict] = []
+        for record in records:
+            seed = record.get("seed")
+            if seed and seed.get("id") and seed["id"] not in seen:
+                seen.add(seed["id"])
+                events.append({**seed, "_role": "seed"})
+            for related in record.get("related_events") or []:
+                if not related or not related.get("id") or related["id"] in seen:
+                    continue
+                seen.add(related["id"])
+                events.append({**related, "_role": "related"})
+
+        events.sort(key=lambda item: item.get("timestamp", ""))
+        links = []
+        for idx in range(1, len(events)):
+            prev = events[idx - 1]
+            curr = events[idx]
+            if prev.get("id") and curr.get("id"):
+                links.append(
+                    {
+                        "source": prev["id"],
+                        "target": curr["id"],
+                        "relationship": curr.get("_match_type", "evolution"),
+                    }
+                )
+
+        return {"concept": concept, "events": events, "links": links}
 
     async def get_centrality_scores(self, event_ids: list[str]) -> dict[str, float]:
         if not event_ids:
@@ -473,6 +590,22 @@ class GraphService:
             "graph_edges": graph_edges,
             "graph_density": round(density, 6),
         }
+
+    async def get_belief_stats(self) -> dict[str, int]:
+        async with self.driver.session() as session:
+            result = await session.run(
+                """
+                MATCH ()-[r:CONTRADICTS|REFINES|REINFORCES]->()
+                RETURN type(r) AS relationship, count(*) AS count
+                """
+            )
+            records = await result.data()
+        output = {"CONTRADICTS": 0, "REFINES": 0, "REINFORCES": 0}
+        for record in records:
+            rel = record.get("relationship")
+            if rel in output:
+                output[rel] = int(record.get("count") or 0)
+        return output
 
     async def get_graph_signals(self, event_ids: list[str]) -> dict[str, dict[str, float]]:
         if not event_ids:
@@ -634,6 +767,75 @@ class GraphService:
                 "concepts": [record["c"] for record in concepts],
                 "edges": edges + event_edges,
             }
+
+    async def get_graph_analytics(self, limit: int = 120) -> dict:
+        graph_data = await self.get_graph_data(limit=limit)
+        graph = nx.DiGraph()
+        for event in graph_data.get("events", []):
+            if event.get("id"):
+                graph.add_node(event["id"], **event)
+        for edge in graph_data.get("edges", []):
+            src = edge.get("source")
+            dst = edge.get("target")
+            if src and dst and src in graph and dst in graph:
+                graph.add_edge(src, dst, relationship=edge.get("rel"))
+
+        undirected = graph.to_undirected()
+        components = [sorted(list(component)) for component in nx.connected_components(undirected)] if len(undirected) else []
+        betweenness = nx.betweenness_centrality(undirected, normalized=True) if len(undirected) else {}
+        pagerank = self._pagerank(graph) if len(graph) else {}
+        try:
+            from networkx.algorithms.community import greedy_modularity_communities
+
+            communities = [sorted(list(comm)) for comm in greedy_modularity_communities(undirected)] if len(undirected) else []
+        except Exception:
+            communities = []
+
+        shortest_paths = []
+        event_ids = [event.get("id") for event in graph_data.get("events", []) if event.get("id")]
+        if len(event_ids) >= 2:
+            source = event_ids[0]
+            target = event_ids[min(len(event_ids) - 1, 4)]
+            try:
+                path = nx.shortest_path(undirected, source=source, target=target)
+                shortest_paths.append({"source": source, "target": target, "path": path, "length": max(len(path) - 1, 0)})
+            except Exception:
+                pass
+
+        return {
+            "node_count": graph.number_of_nodes(),
+            "edge_count": graph.number_of_edges(),
+            "connected_components": components[:10],
+            "communities": communities[:10],
+            "pagerank": dict(sorted(pagerank.items(), key=lambda item: item[1], reverse=True)[:20]),
+            "betweenness": dict(sorted(betweenness.items(), key=lambda item: item[1], reverse=True)[:20]),
+            "shortest_paths": shortest_paths,
+        }
+
+    def _pagerank(self, graph: nx.DiGraph, alpha: float = 0.85, max_iter: int = 100, tol: float = 1.0e-6) -> dict[str, float]:
+        nodes = list(graph.nodes())
+        if not nodes:
+            return {}
+        n = len(nodes)
+        ranks = {node: 1.0 / n for node in nodes}
+        out_degree = {node: graph.out_degree(node) for node in nodes}
+
+        for _ in range(max_iter):
+            prev = ranks.copy()
+            dangling_sum = sum(prev[node] for node in nodes if out_degree[node] == 0)
+            for node in nodes:
+                rank = (1.0 - alpha) / n
+                rank += alpha * dangling_sum / n
+                for pred in graph.predecessors(node):
+                    degree = out_degree.get(pred, 0)
+                    if degree:
+                        rank += alpha * prev[pred] / degree
+                ranks[node] = rank
+            delta = sum(abs(ranks[node] - prev[node]) for node in nodes)
+            if delta < tol:
+                break
+        total = sum(ranks.values()) or 1.0
+        return {node: value / total for node, value in ranks.items()}
 
 
 _graph_service: Optional[GraphService] = None

@@ -12,6 +12,7 @@ async def get_stats() -> dict:
     vector_svc = get_vector_service()
 
     graph_stats = await graph_svc.get_graph_stats()
+    belief_stats = await graph_svc.get_belief_stats()
     try:
         vector_count = len(await vector_svc.get_all_events(limit=5000))
     except Exception:
@@ -19,5 +20,6 @@ async def get_stats() -> dict:
 
     return {
         **graph_stats,
+        "belief_edges": belief_stats,
         "vector_memories": vector_count,
     }

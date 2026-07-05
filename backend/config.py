@@ -11,6 +11,24 @@ class Settings(BaseSettings):
     qdrant_host: str = "localhost"
     qdrant_port: int = 6333
     collection_name: str = "chronomind_events"
+    memory_retrieval_boost: float = 0.05
+    memory_selection_boost: float = 0.08
+    memory_answer_boost: float = 0.06
+    memory_reference_boost: float = 0.04
+    memory_ignored_decay: float = 0.01
+    memory_age_decay: float = 0.02
+    memory_connection_boost: float = 0.03
+    memory_decay_floor: float = 0.15
+    memory_decay_ceiling: float = 1.0
+    memory_retrieval_growth: float = 0.04
+    memory_selection_growth: float = 0.06
+    memory_answer_growth: float = 0.08
+    memory_reference_growth: float = 0.05
+    ranker_model_path: str = "backend/data/ranker_model.json"
+    session_expiry_hours: int = 36
+    consolidation_similarity_threshold: float = 0.9
+    consolidation_time_window_days: int = 14
+    consolidation_limit: int = 7
 
     class Config:
         env_file = ".env"

@@ -10,6 +10,7 @@ interface StatsData {
   total_entities: number
   graph_edges: number
   graph_density: number
+  belief_edges?: Record<string, number>
 }
 
 export default function SystemStats() {
@@ -63,6 +64,13 @@ export default function SystemStats() {
             </div>
           ))}
         </div>
+        {data?.belief_edges && (
+          <div className="mt-3 flex flex-wrap gap-2 text-[11px] text-slate-400">
+            <span className="rounded-full border border-slate-700 bg-slate-900/60 px-3 py-1">Contradicts {data.belief_edges.CONTRADICTS ?? 0}</span>
+            <span className="rounded-full border border-slate-700 bg-slate-900/60 px-3 py-1">Refines {data.belief_edges.REFINES ?? 0}</span>
+            <span className="rounded-full border border-slate-700 bg-slate-900/60 px-3 py-1">Reinforces {data.belief_edges.REINFORCES ?? 0}</span>
+          </div>
+        )}
       </div>
     </section>
   )

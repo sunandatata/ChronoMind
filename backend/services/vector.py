@@ -42,6 +42,14 @@ class VectorService:
         await self.client.upsert(collection_name=self.collection, points=[point])
         return str(point.id)
 
+    async def update_event_payload(self, event_id: str, payload: dict) -> None:
+        point_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, event_id))
+        await self.client.set_payload(
+            collection_name=self.collection,
+            payload=payload,
+            points=[point_id],
+        )
+
     def _query_filter(self, must: list[FieldCondition] | None = None) -> Filter:
         return Filter(
             must=must or [],
