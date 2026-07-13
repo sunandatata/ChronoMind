@@ -4,8 +4,8 @@ from .event import MemoryEvent
 
 
 class QueryRequest(BaseModel):
-    query: str
-    top_k: int = 8
+    query: str = Field(min_length=1)
+    top_k: int = Field(default=8, ge=1, le=25)
     time_start: Optional[str] = None
     time_end: Optional[str] = None
     session_id: Optional[str] = None

@@ -45,7 +45,7 @@ class MemoryEvent(BaseModel):
 
 
 class IngestRequest(BaseModel):
-    text: str
+    text: str = Field(min_length=1)
     timestamp: Optional[datetime] = None
     source: SourceType = SourceType.MANUAL
     source_id: Optional[str] = None

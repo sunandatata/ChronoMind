@@ -261,6 +261,9 @@ def assemble_context(
         ranking_details,
         query_profile,
     )
+    if not filtered_events and compressed_events:
+        filtered_events = compressed_events
+        filtered_embeddings = compressed_embeddings
     grouped = _group_timeline(filtered_events)
 
     first = filtered_events[0].timestamp.strftime("%Y-%m-%d")

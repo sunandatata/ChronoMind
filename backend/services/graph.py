@@ -260,6 +260,23 @@ class GraphService:
                 **params,
             )
 
+    async def get_event_properties(self, event_id: str) -> dict:
+        async with self.driver.session() as session:
+            result = await session.run(
+                """
+                MATCH (e:Event {id: $event_id})
+                RETURN e.id AS id,
+                       e.memory_strength AS memory_strength,
+                       e.retrieval_count AS retrieval_count,
+                       e.last_accessed_at AS last_accessed_at,
+                       e.importance_score AS importance_score,
+                       e.confidence AS confidence
+                """,
+                event_id=event_id,
+            )
+            records = await result.data()
+        return dict(records[0]) if records else {}
+
     async def graph_traversal_retrieve(
         self,
         entities: list[str],
